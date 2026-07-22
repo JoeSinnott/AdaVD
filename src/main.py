@@ -355,12 +355,15 @@ def main():
             record=True, record_type=args.record_type, desc="Calculating target records",
         )
         pipe.scheduler.set_timesteps(args.total_timesteps)
-        original_keys = target_records[args.record_type].keys()
-        target_records[args.record_type].update({
-            f"{timestep}.{'.'.join(key.split('.')[1:])}": target_records[args.record_type][key]
-            for timestep in pipe.scheduler.timesteps
-            for key in original_keys
-        })
+        
+        for r_type in args.record_type.split(','):
+            r_type = r_type.strip()
+            original_keys = target_records[r_type].keys()
+            target_records[r_type].update({
+                f"{timestep}.{'.'.join(key.split('.')[1:])}": target_records[r_type][key]
+                for timestep in pipe.scheduler.timesteps
+                for key in original_keys
+    })
     del unet
 
     # Sampling process
