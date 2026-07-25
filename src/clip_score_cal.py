@@ -49,8 +49,14 @@ class CLIP_Score():
         images_feats = self.processor(images=img, return_tensors="pt").to('cuda')
         images_feats = self.model.get_image_features(**images_feats)
 
+        if hasattr(images_feats, 'pooler_output'):
+            images_feats = images_feats.pooler_output
+
         texts_feats = self.tokenizer(text, padding=True, truncation=True, max_length=77, return_tensors="pt",).to('cuda')
         texts_feats = self.model.get_text_features(**texts_feats)
+
+        if hasattr(texts_feats, 'pooler_output'):
+            texts_feats = texts_feats.pooler_output
 
         images_feats = images_feats / images_feats.norm(dim=1, p=2, keepdim=True)
         texts_feats = texts_feats / texts_feats.norm(dim=1, p=2, keepdim=True)
