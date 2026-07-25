@@ -68,7 +68,7 @@ class Pytorch_FID():
         self.model = InceptionV3([block_idx]).to(device)
 
     def __call__(self, root_path, pretrained_path, content, sub_root):
-        paths = [os.path.join(root_path, content, sub_root), os.path.join(pretrained_path, content, 'original')]
+        paths = [os.path.join(root_path, content, sub_root), os.path.join(root_path, content, 'original')]
         m1, s1 = fid_score.compute_statistics_of_path(paths[0], self.model, self.batch_size,
                                             self.dims, self.device, self.num_workers)
         m2, s2 = fid_score.compute_statistics_of_path(paths[1], self.model, self.batch_size,
