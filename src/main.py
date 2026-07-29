@@ -315,15 +315,8 @@ def main():
     mode_list = args.mode.replace(' ', '').split(',')
 
     # region [If certain concept is already sampled, then skip it.]
-    concept_list, concept_list_tmp = [], [item.strip() for item in args.contents.split(',')]
-    if 'retain' in mode_list:
-        for concept in concept_list_tmp:
-            check_path = os.path.join(args.save_root, args.target_concept.replace(', ', '_'), concept, 'retain')
-            os.makedirs(check_path, exist_ok=True)
-            if len(os.listdir(check_path)) != len(template_dict[args.erase_type]) * 10:
-                concept_list.append(concept)
-    else:
-        concept_list = concept_list_tmp
+    erase_types = [t.strip() for t in args.erase_type.split(',')]
+    concept_list = [item.strip() for item in args.contents.split(',')]
     if len(concept_list) == 0: sys.exit()
     # endregion
 
@@ -355,7 +348,7 @@ def main():
             record=True, record_type=args.record_type, desc="Calculating target records",
         )
         pipe.scheduler.set_timesteps(args.total_timesteps)
-        
+
         for r_type in args.record_type.split(','):
             r_type = r_type.strip()
             original_keys = target_records[r_type].keys()
@@ -368,69 +361,71 @@ def main():
 
     # Sampling process
     seed_everything(args.seed, True)
-    prompt_list = [[x.format(concept) for x in template_dict[args.erase_type]] for concept in concept_list]
-    for i in range(int(args.num_samples // bs)):
-        latent = torch.randn(bs, 4, 64, 64).to(pipe.device, dtype=target_concept_encoding.dtype)
-        for concept, prompts in zip(concept_list, prompt_list):
-            for prompt in prompts:
+    
+    for e_type in erase_types:
+        print(f"\n==========================================")
+        print(f"RUNNING ATTACK CATEGORY: {e_type}")
+        print(f"==========================================\n")
+        
+        templates = template_dict[e_type]
+        prompt_list = [[x.format(concept) for x in templates] for concept in concept_list]
+        
+        for i in range(int(args.num_samples // bs)):
+            latent = torch.randn(bs, 4, 64, 64).to(pipe.device, dtype=target_concept_encoding.dtype)
+            for concept, prompts in zip(concept_list, prompt_list):
+                for prompt in prompts:
 
-                ORTHO_DECOMP_STORAGE, Images = {}, {}
-                encoding = get_textencoding(get_token(prompt, tokenizer), text_encoder)
+                    ORTHO_DECOMP_STORAGE, Images = {}, {}
+                    encoding = get_textencoding(get_token(prompt, tokenizer), text_encoder)
 
-                if 'original' in mode_list:
-                    Images['original'] = diffusion(unet=unet_original, scheduler=pipe.scheduler, 
-                                                 latents=latent, start_timesteps=0, 
-                                                 text_embeddings=torch.cat([uncond_encoding] * bs + [encoding] * bs, dim=0), 
-                                                 total_timesteps=args.total_timesteps, 
-                                                 guidance_scale=args.guidance_scale, 
-                                                 desc=f"{prompt} | original")
-                if 'erase' in mode_list:
-                    unet_erase = set_attenprocessor(unet_erase, atten_type='erase', target_records=copy.deepcopy(target_records), 
-                                                    sigmoid_setting=(args.sigmoid_a, args.sigmoid_b, args.sigmoid_c), 
-                                                    decomp_timestep=args.decomp_timestep,)
-                    Images['erase'] = diffusion(unet=unet_erase, scheduler=pipe.scheduler, 
-                                              latents=latent, start_timesteps=0, 
-                                              text_embeddings=torch.cat([uncond_encoding] * bs + [encoding] * bs, dim=0), 
-                                              total_timesteps=args.total_timesteps, 
-                                              guidance_scale=args.guidance_scale, 
-                                              desc=f"{prompt} | erase")
+                    if 'original' in mode_list:
+                        Images['original'] = diffusion(unet=unet_original, scheduler=pipe.scheduler, 
+                                                     latents=latent, start_timesteps=0, 
+                                                     text_embeddings=torch.cat([uncond_encoding] * bs + [encoding] * bs, dim=0), 
+                                                     total_timesteps=args.total_timesteps, 
+                                                     guidance_scale=args.guidance_scale, 
+                                                     desc=f"{prompt} | original")
+                        
+                    if 'retain' in mode_list:
+                        unet_retain = set_attenprocessor(unet_retain, atten_type='retain', target_records=copy.deepcopy(target_records), 
+                                                         sigmoid_setting=(args.sigmoid_a, args.sigmoid_b, args.sigmoid_c), 
+                                                         decomp_timestep=args.decomp_timestep,)
+                        Images['retain'] = diffusion(unet=unet_retain, scheduler=pipe.scheduler, 
+                                                   latents=latent, start_timesteps=0, 
+                                                   text_embeddings=torch.cat([uncond_encoding] * bs + [encoding] * bs, dim=0), 
+                                                   total_timesteps=args.total_timesteps, 
+                                                   guidance_scale=args.guidance_scale, 
+                                                   desc=f"{prompt} | retain")
+                        
+                    save_path = os.path.join(args.save_root, args.target_concept.replace(', ', '_'), e_type, concept)
+                    for mode in mode_list: os.makedirs(os.path.join(save_path, mode), exist_ok=True)
+                    if len(mode_list) > 1: os.makedirs(os.path.join(save_path, 'combine'), exist_ok=True)
                     
-                if 'retain' in mode_list:
-                    unet_retain = set_attenprocessor(unet_retain, atten_type='retain', target_records=copy.deepcopy(target_records), 
-                                                     sigmoid_setting=(args.sigmoid_a, args.sigmoid_b, args.sigmoid_c), 
-                                                     decomp_timestep=args.decomp_timestep,)
-                    Images['retain'] = diffusion(unet=unet_retain, scheduler=pipe.scheduler, 
-                                               latents=latent, start_timesteps=0, 
-                                               text_embeddings=torch.cat([uncond_encoding] * bs + [encoding] * bs, dim=0), 
-                                               total_timesteps=args.total_timesteps, 
-                                               guidance_scale=args.guidance_scale, 
-                                               desc=f"{prompt} | retain")
-                    
-                save_path = os.path.join(args.save_root, args.target_concept.replace(', ', '_'), concept)
-                for mode in mode_list: os.makedirs(os.path.join(save_path, mode), exist_ok=True)
-                if len(mode_list) > 1: os.makedirs(os.path.join(save_path, 'combine'), exist_ok=True)
-                
-                # Decode and process images
-                decoded_imgs = {
-                    name: [process_img(vae.decode(img.unsqueeze(0) / vae.config.scaling_factor, return_dict=False)[0]) for img in img_list]
-                    for name, img_list in Images.items()
-                }
+                    # Decode and process images
+                    decoded_imgs = {
+                        name: [process_img(vae.decode(img.unsqueeze(0) / vae.config.scaling_factor, return_dict=False)[0]) for img in img_list]
+                        for name, img_list in Images.items()
+                    }
 
-                # Save images
-                def combine_images_horizontally(Images):
-                    widths, heights = zip(*(img.size for img in Images))
-                    new_img = Image.new('RGB', (sum(widths), max(heights)))
-                    for i, img in enumerate(Images): new_img.paste(img, (sum(widths[:i]), 0))
-                    return new_img
-                for idx in range(len(decoded_imgs[mode_list[0]])):
-                    save_filename = re.sub(r'[^\w\s]', '', prompt).replace(', ', '_') + f"_{int(idx + bs * i)}.png"
-                    images_to_combine = []
-                    for mode in mode_list: 
-                        decoded_imgs[mode][idx].save(os.path.join(save_path, mode, save_filename))
-                        images_to_combine.append(decoded_imgs[mode][idx])
-                    if len(mode_list) > 1:
-                        img_combined = combine_images_horizontally(images_to_combine)
-                        img_combined.save(os.path.join(save_path, 'combine', save_filename))
+                    # Save images
+                    def combine_images_horizontally(Images):
+                        widths, heights = zip(*(img.size for img in Images))
+                        new_img = Image.new('RGB', (sum(widths), max(heights)))
+                        for i, img in enumerate(Images): 
+                            new_img.paste(img, (sum(widths[:i]), 0))
+                        return new_img
+
+                    for idx in range(len(decoded_imgs[mode_list[0]])):
+                        save_filename = re.sub(r'[^\w\s]', '', prompt).replace(', ', '_') + f"_{int(idx + bs * i)}.png"
+                        images_to_combine = []
+                        
+                        for mode in mode_list: 
+                            decoded_imgs[mode][idx].save(os.path.join(save_path, mode, save_filename))
+                            images_to_combine.append(decoded_imgs[mode][idx])
+                            
+                        if len(mode_list) > 1:
+                            img_combined = combine_images_horizontally(images_to_combine)
+                            img_combined.save(os.path.join(save_path, 'combine', save_filename))
 
 
 if __name__ == '__main__':
