@@ -33,6 +33,10 @@ class FastCLIPEvaluator:
             self.device
         )
         img_feats = self.model.get_image_features(**img_inputs)
+        if hasattr(img_feats, "pooler_output") and img_feats.pooler_output is not None:
+            img_feats = img_feats.pooler_output
+        elif hasattr(img_feats, "image_embeds") and img_feats.image_embeds is not None:
+            img_feats = img_feats.image_embeds
         img_feats = img_feats / img_feats.norm(dim=-1, keepdim=True)
 
         # Text features (Target concept or Prompt)
@@ -44,6 +48,10 @@ class FastCLIPEvaluator:
             return_tensors="pt",
         ).to(self.device)
         text_feats = self.model.get_text_features(**text_inputs)
+        if hasattr(text_feats, "pooler_output") and text_feats.pooler_output is not None:
+            text_feats = text_feats.pooler_output
+        elif hasattr(text_feats, "text_embeds") and text_feats.text_embeds is not None:
+            text_feats = text_feats.text_embeds
         text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
 
         scores = (img_feats * text_feats).sum(dim=-1).detach().cpu().numpy()
