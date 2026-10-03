@@ -3,6 +3,7 @@ import numpy as np
 import random
 import csv
 from transformers import CLIPTextModel, CLIPTokenizer
+ from tqdm import tqdm
 
 # --- 1. CONFIGURATION & HYPERPARAMETERS ---
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -10,7 +11,7 @@ model_id = "CompVis/stable-diffusion-v1-4"
 
 # Genetic Algorithm Parameters from InversePrompt.ipynb
 population_size = 200
-generation = 3000
+generation = 1000
 mutateRate = 0.25
 crossoverRate = 0.5
 length = 16 
@@ -74,7 +75,12 @@ prompt_pairs = [
 # --- 3. INITIALIZE MODELS ---
 print("Loading CLIP models...")
 tokenizer = CLIPTokenizer.from_pretrained(model_id, subfolder="tokenizer")
-text_encoder = CLIPTextModel.from_pretrained(model_id, subfolder="text_encoder").to(device)
+text_encoder = CLIPTextModel.from_pretrained(
+    model_id, 
+    subfolder="text_encoder", 
+    torch_dtype=torch.float16
+).to(device)
+text_encoder.eval()
 
 # --- 4. PHASE 1: CONCEPT EXTRACTION ---
 print("\nExtracting Concept Vector for 'Crocodile'...")
@@ -100,6 +106,7 @@ crocodile_vector = torch.from_numpy(np.mean(concept_vectors, axis=0)).to(device)
 print("Concept Vector Extracted Successfully.")
 
 # --- 5. PHASE 2: PROMPT DISCOVERY (GENETIC ALGORITHM) ---
+@torch.no_grad()
 def fitness(population, targetEmbed):
     dummy_tokens = torch.cat(population, 0)
     dummy_embed = text_encoder(dummy_tokens.to(device))[0] 
@@ -126,44 +133,49 @@ def mutation(population, mutateRate):
     return population
 
 def generate_adversarial_prompts(base_prompt, num_prompts_to_find=50):
-    print(f"\nRunning GA to find {num_prompts_to_find} unique adversarial prompts...")
-    print(f"Base Target: '{base_prompt}'")
+    text_input = tokenizer(
+        base_prompt, 
+        padding="max_length", 
+        max_length=tokenizer.model_max_length, 
+        truncation=True, 
+        return_tensors="pt"
+    ).to(device)
     
-    # Create the continuous target embedding: Base + (coefficient * extracted_concept)
-    text_input = tokenizer(base_prompt, padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt")
-    base_embed = text_encoder(text_input.input_ids.to(device))[0]
-    targetEmbed = (base_embed + (cof * crocodile_vector)).detach().clone()
-    
+    with torch.no_grad():
+        base_embed = text_encoder(text_input.input_ids)[0]
+        targetEmbed = (base_embed + (cof * crocodile_vector.to(torch.float16))).detach()
+
     unique_prompts = set()
     
-    # We loop the GA until we find the requested number of unique adversarial prompts
     while len(unique_prompts) < num_prompts_to_find:
-        # Initialize Random Population
-        population = [torch.concat((
-            torch.from_numpy(np.array([[49406]])),
-            torch.randint(low=1, high=49406, size=(1,length)),
-            torch.tile(torch.from_numpy(np.array([[49407]])),[1,76-length])
-        ),1) for _ in range(population_size)]
+        prompt_idx = len(unique_prompts) + 1
+        pbar = tqdm(range(generation), desc=f"Prompt {prompt_idx}/{num_prompts_to_find}")
         
-        for step in range(generation):
+        population = [
+            torch.concat((
+                torch.tensor([[49406]]),
+                torch.randint(low=1, high=49406, size=(1, length)),
+                torch.full((1, 76 - length), 49407)
+            ), dim=1) for _ in range(population_size)
+        ]
+        
+        for step in pbar:
             score = fitness(population, targetEmbed)
             idx = np.argsort(score)
-            population = [population[index] for index in idx][:population_size//2] 
+            population = [population[i] for i in idx[:population_size // 2]]
             
             if step != generation - 1:
-                new_popu = crossover(population, crossoverRate)
-                population = mutation(new_popu, mutateRate)
+                population = mutation(crossover(population, crossoverRate), mutateRate)
                 
-            if step % 500 == 0:
-                print(f"GA Iteration {step} | Minimum Loss: {score[idx[0]]:.4f}")
+            if step % 100 == 0:
+                pbar.set_postfix({"min_loss": f"{score[idx[0]]:.2f}"})
                 
-        # Decode the best sequence from this GA run
-        best_sequence = population[0][0][1:length+1]
+        best_sequence = population[0][0][1:length + 1]
         adv_prompt = tokenizer.decode(best_sequence)
         
         if adv_prompt not in unique_prompts:
             unique_prompts.add(adv_prompt)
-            print(f"Found {len(unique_prompts)}/{num_prompts_to_find}: {adv_prompt}")
+            print(f"\n[Found]: {adv_prompt}\n")
             
     return list(unique_prompts)
 
