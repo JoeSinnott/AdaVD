@@ -3,7 +3,7 @@ import numpy as np
 import random
 import csv
 from transformers import CLIPTextModel, CLIPTokenizer
- from tqdm import tqdm
+from tqdm import tqdm
 
 # --- 1. CONFIGURATION & HYPERPARAMETERS ---
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
