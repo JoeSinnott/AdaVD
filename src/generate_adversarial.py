@@ -84,7 +84,7 @@ def generate_adversarial_prompts(target_concept, num_prompts=50):
 
     return list(unique_prompts)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     adversarial_list = generate_adversarial_prompts("a photo of a crocodile", num_prompts=50)
     
     print("\n--- Copy and paste this into template.py ---")
