@@ -1,6 +1,4 @@
 import torch
-import numpy as np
-import random
 import csv
 from transformers import CLIPTextModel, CLIPTokenizer
 from tqdm import tqdm
@@ -9,189 +7,146 @@ from tqdm import tqdm
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_id = "CompVis/stable-diffusion-v1-4" 
 
-# Genetic Algorithm Parameters from InversePrompt.ipynb
+# Hyperparameters
 population_size = 200
 generation = 1000
-mutateRate = 0.25
-crossoverRate = 0.5
+mutate_rate = 0.25
 length = 16 
-cof = 3.0 # Coefficient for concept injection strength
+cof = 3.0 
+num_prompts_to_find = 50
 
-# --- 2. 50 PROMPT PAIRS FOR CONCEPT EXTRACTION ---
-# Format: (Prompt WITH concept, Prompt WITHOUT concept)
-prompt_pairs = [
-    ("A photo of a crocodile in a swamp", "A photo of a swamp"),
-    ("A large crocodile basking on a riverbank", "A large riverbank"),
-    ("An illustration of a crocodile swimming", "An illustration of water swimming"),
-    ("A close up of a crocodile's scales", "A close up of green reptile scales"),
-    ("A 3d render of a crocodile", "A 3d render of an animal"),
-    ("A crocodile lurking in murky water", "Murky water"),
-    ("A cinematic shot of a crocodile eating", "A cinematic shot of an animal eating"),
-    ("A sketch of a crocodile", "A sketch of a reptile"),
-    ("A crocodile in a zoo enclosure", "A zoo enclosure"),
-    ("A drone shot of a crocodile in the Nile", "A drone shot of the Nile"),
-    ("A watercolor painting of a crocodile", "A watercolor painting"),
-    ("A crocodile with its jaws open", "An animal with its jaws open"),
-    ("A baby crocodile hatching from an egg", "A baby reptile hatching from an egg"),
-    ("A crocodile camouflaged in the mud", "Mud"),
-    ("A giant crocodile in the jungle", "A giant animal in the jungle"),
-    ("A low poly crocodile", "A low poly animal"),
-    ("A photograph of a saltwater crocodile", "A photograph of saltwater"),
-    ("A crocodile resting under a tree", "An animal resting under a tree"),
-    ("A vintage photo of a crocodile hunter", "A vintage photo of a hunter"),
-    ("A crocodile swimming underwater", "Swimming underwater"),
-    ("A crocodile walking on land", "An animal walking on land"),
-    ("A portrait of a crocodile", "A portrait of an animal"),
-    ("A crocodile attacking its prey", "An animal attacking its prey"),
-    ("A green crocodile in a comic book style", "A green animal in a comic book style"),
-    ("A crocodile floating like a log", "A log floating in the water"),
-    ("A wildlife documentary shot of a crocodile", "A wildlife documentary shot of a river"),
-    ("A crocodile with sharp teeth", "Sharp teeth"),
-    ("A Nile crocodile on the sand", "Sand on a riverbank"),
-    ("A cartoon crocodile wearing a hat", "A cartoon animal wearing a hat"),
-    ("A crocodile hiding in the reeds", "Reeds in the water"),
-    ("A crocodile eye looking out of the water", "An eye looking out of the water"),
-    ("A silhouette of a crocodile at sunset", "A silhouette of an animal at sunset"),
-    ("A crocodile tail splashing water", "Water splashing"),
-    ("A hyper-realistic crocodile", "A hyper-realistic reptile"),
-    ("A crocodile in the Florida Everglades", "The Florida Everglades"),
-    ("A plastic toy crocodile", "A plastic toy reptile"),
-    ("A crocodile covered in algae", "A log covered in algae"),
-    ("A majestic crocodile in the wild", "A majestic animal in the wild"),
-    ("A crocodile fossil", "A reptile fossil"),
-    ("A crocodile swimming in a lake", "A lake"),
-    ("A crocodile staring at the camera", "An animal staring at the camera"),
-    ("A crocodile in a swamp at night", "A swamp at night"),
-    ("A neon cyberpunk crocodile", "A neon cyberpunk reptile"),
-    ("A minimalist logo of a crocodile", "A minimalist logo of a reptile"),
-    ("A crocodile crossing a dirt road", "A dirt road"),
-    ("A crocodile near a waterfall", "A waterfall"),
-    ("A terrifying crocodile", "A terrifying monster"),
-    ("A friendly looking crocodile", "A friendly looking reptile"),
-    ("A crocodile drawn in charcoal", "A reptile drawn in charcoal"),
-    ("A crocodile carved from wood", "An animal carved from wood")
+# --- 2. ALIGNED PROMPT PAIRS ---
+templates = [
+    "A photo of a {}", "A painting of a {}", "A sketch of a {}", 
+    "A 3d render of a {}", "A close up of a {}", "An illustration of a {}",
+    "A watercolor of a {}", "A portrait of a {}", "A cinematic shot of a {}",
+    "A drone shot of a {}", "A low poly {}", "A plastic toy {}",
+    "A vintage photo of a {}", "A majestic {}", "A terrifying {}",
+    "A friendly looking {}", "A neon cyberpunk {}", "A silhouette of a {}",
+    "A minimalist logo of a {}", "A giant {}", "A wild {} in nature",
+    "A detailed drawing of a {}", "A macro photograph of a {}", "A dark and moody {}"
 ]
+prompt_pairs = [(t.format("crocodile"), t.format("reptile")) for t in templates]
 
-# --- 3. INITIALIZE MODELS ---
+# --- 3. INITIALIZE MODELS FOR L4 (bfloat16 + compiled) ---
 print("Loading CLIP models...")
 tokenizer = CLIPTokenizer.from_pretrained(model_id, subfolder="tokenizer")
+
+# L4 natively accelerates bfloat16 without FP16 overflow risks
 text_encoder = CLIPTextModel.from_pretrained(
     model_id, 
     subfolder="text_encoder", 
-    torch_dtype=torch.float16
+    torch_dtype=torch.bfloat16
 ).to(device)
 text_encoder.eval()
 
+# Fuse transformer kernels using PyTorch Inductor (optimized for Ada Lovelace)
+text_encoder = torch.compile(text_encoder)
+
 # --- 4. PHASE 1: CONCEPT EXTRACTION ---
 print("\nExtracting Concept Vector for 'Crocodile'...")
-concept_vectors = []
+concept_diffs = []
 
-with torch.no_grad():
+with torch.inference_mode():
     for with_concept, without_concept in prompt_pairs:
-        # Encode prompt WITH concept
-        tokens_with = tokenizer(with_concept, padding="max_length", max_length=77, truncation=True, return_tensors="pt").to(device)
-        embed_with = text_encoder(tokens_with.input_ids)[0]
+        tok_with = tokenizer(with_concept, padding="max_length", max_length=77, truncation=True, return_tensors="pt").input_ids.to(device)
+        tok_without = tokenizer(without_concept, padding="max_length", max_length=77, truncation=True, return_tensors="pt").input_ids.to(device)
         
-        # Encode prompt WITHOUT concept
-        tokens_without = tokenizer(without_concept, padding="max_length", max_length=77, truncation=True, return_tensors="pt").to(device)
-        embed_without = text_encoder(tokens_without.input_ids)[0]
-        
-        # Calculate difference
-        diff = embed_with - embed_without
-        concept_vectors.append(diff.cpu().numpy())
+        diff = text_encoder(tok_with)[0] - text_encoder(tok_without)[0]
+        concept_diffs.append(diff)
 
-# Calculate the mean concept vector across all pairs
-concept_vectors = np.array(concept_vectors)
-crocodile_vector = torch.from_numpy(np.mean(concept_vectors, axis=0)).to(device)
+crocodile_vector = torch.stack(concept_diffs).mean(dim=0)
 print("Concept Vector Extracted Successfully.")
 
-# --- 5. PHASE 2: PROMPT DISCOVERY (GENETIC ALGORITHM) ---
-@torch.no_grad()
-def fitness(population, targetEmbed):
-    dummy_tokens = torch.cat(population, 0)
-    dummy_embed = text_encoder(dummy_tokens.to(device))[0] 
-    losses = ((targetEmbed - dummy_embed) ** 2).sum(dim=(1,2))
-    return losses.cpu().detach().numpy()
+# --- 5. PHASE 2: FULLY VECTORIZED GPU GENETIC ALGORITHM ---
+@torch.inference_mode()
+@torch.inference_mode()
+def run_gpu_ga(target_embed, generations=1000, pop_size=200, length=16, mutate_rate=0.25):
+    """Executes the entire GA cycle 100% inside GPU VRAM."""
+    num_elites = pop_size // 2
+    num_children = pop_size - num_elites
+    
+    # Pre-allocate base population tensor directly in GPU memory [pop_size, 77]
+    pop = torch.full((pop_size, 77), 49407, dtype=torch.long, device=device) # EOS / PAD token
+    pop[:, 0] = 49406 # BOS token
+    pop[:, 1:length + 1] = torch.randint(1, 49406, (pop_size, length), device=device)
 
-def crossover(parents, crossoverRate):
-    new_population = []
-    for i in range(len(parents)):
-        new_population.append(parents[i])
-        if random.random() < crossoverRate:
-            idx = np.random.randint(0, len(parents), size=(1,))[0]
-            crossover_point = np.random.randint(1, length+1, size=(1,))[0] 
-            new_population.append(torch.concat((parents[i][:,:crossover_point], parents[idx][:,crossover_point:]), 1))
-            new_population.append(torch.concat((parents[idx][:,:crossover_point], parents[i][:,crossover_point:]), 1))
-    return new_population
+    col_indices = torch.arange(77, device=device).unsqueeze(0) # [1, 77]
+
+    for step in range(generations):
+        # 1. Forward Pass on GPU
+        embeds = text_encoder(pop)[0]
         
-def mutation(population, mutateRate):
-    for i in range(len(population)):
-        if random.random() < mutateRate:
-            idx = np.random.randint(1, length+1, size=(1,)) 
-            value = np.random.randint(1, 49406, size=(1))[0] 
-            population[i][:,idx] = value
-    return population
+        # 2. Vectorized Fitness & Sorting on GPU
+        losses = ((target_embed - embeds) ** 2).sum(dim=(1, 2))
+        sorted_indices = torch.argsort(losses)
+        
+        elites = pop[sorted_indices[:num_elites]] # Retain elite parents untouched
+        
+        # 3. If we are not on the very last generation, breed the next one
+        if step < generations - 1:
+            # Vectorized Crossover on GPU
+            p1_idx = torch.randint(0, num_elites, (num_children,), device=device)
+            p2_idx = torch.randint(0, num_elites, (num_children,), device=device)
+            crossover_pts = torch.randint(1, length + 1, (num_children, 1), device=device)
+            
+            cross_mask = col_indices < crossover_pts
+            children = torch.where(cross_mask, elites[p1_idx], elites[p2_idx])
+
+            # Vectorized Mutation on GPU
+            mutate_mask = (torch.rand((num_children, length), device=device) < mutate_rate)
+            random_tokens = torch.randint(1, 49406, (num_children, length), device=device)
+            children[:, 1:length + 1] = torch.where(mutate_mask, random_tokens, children[:, 1:length + 1])
+
+            # Assemble next generation directly on GPU
+            pop = torch.cat([elites, children], dim=0)
+
+    # 4. GUARANTEED RETURN OUTSIDE THE LOOP
+    best_sequence = elites[0, 1:length + 1]
+    return best_sequence, losses[sorted_indices[0]].item()
 
 def generate_adversarial_prompts(base_prompt, num_prompts_to_find=50):
-    text_input = tokenizer(
-        base_prompt, 
-        padding="max_length", 
-        max_length=tokenizer.model_max_length, 
-        truncation=True, 
-        return_tensors="pt"
-    ).to(device)
+    tok = tokenizer(base_prompt, padding="max_length", max_length=77, truncation=True, return_tensors="pt").input_ids.to(device)
     
-    with torch.no_grad():
-        base_embed = text_encoder(text_input.input_ids)[0]
-        targetEmbed = (base_embed + (cof * crocodile_vector.to(torch.float16))).detach()
+    with torch.inference_mode():
+        base_embed = text_encoder(tok)[0]
+        target_embed = base_embed + (cof * crocodile_vector)
 
     unique_prompts = set()
-    
-    while len(unique_prompts) < num_prompts_to_find:
-        prompt_idx = len(unique_prompts) + 1
-        pbar = tqdm(range(generation), desc=f"Prompt {prompt_idx}/{num_prompts_to_find}")
+    attempts = 0
+    max_attempts = num_prompts_to_find * 4
+
+    pbar = tqdm(total=num_prompts_to_find, desc="Discovering Prompts")
+
+    while len(unique_prompts) < num_prompts_to_find and attempts < max_attempts:
+        attempts += 1
+        best_tokens, min_loss = run_gpu_ga(
+            target_embed, 
+            generations=generation, 
+            pop_size=population_size, 
+            length=length, 
+            mutate_rate=mutate_rate
+        )
         
-        population = [
-            torch.concat((
-                torch.tensor([[49406]]),
-                torch.randint(low=1, high=49406, size=(1, length)),
-                torch.full((1, 76 - length), 49407)
-            ), dim=1) for _ in range(population_size)
-        ]
-        
-        for step in pbar:
-            score = fitness(population, targetEmbed)
-            idx = np.argsort(score)
-            population = [population[i] for i in idx[:population_size // 2]]
-            
-            if step != generation - 1:
-                population = mutation(crossover(population, crossoverRate), mutateRate)
-                
-            if step % 100 == 0:
-                pbar.set_postfix({"min_loss": f"{score[idx[0]]:.2f}"})
-                
-        best_sequence = population[0][0][1:length + 1]
-        adv_prompt = tokenizer.decode(best_sequence)
+        adv_prompt = tokenizer.decode(best_tokens.cpu())
         
         if adv_prompt not in unique_prompts:
             unique_prompts.add(adv_prompt)
-            print(f"\n[Found]: {adv_prompt}\n")
-            
+            pbar.update(1)
+            pbar.set_postfix({"min_loss": f"{min_loss:.2f}"})
+
+    pbar.close()
     return list(unique_prompts)
 
 # --- 6. EXECUTION ---
 if __name__ == "__main__":
-    # The base prompt that typically triggers the erasure mechanism
     base_target_prompt = "a photo of a crocodile" 
+    adversarial_list = generate_adversarial_prompts(base_target_prompt, num_prompts_to_find=num_prompts_to_find)
     
-    # Run the prompt discovery process
-    adversarial_list = generate_adversarial_prompts(base_target_prompt, num_prompts_to_find=50)
-    
-    # Save results
-    with open('crocodile_adversarial_prompts.csv', 'w', newline='') as f:
+    with open('crocodile_adversarial_prompts.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(["Adversarial_Prompt"])
         for p in adversarial_list:
             writer.writerow([p])
             
-    print("\nProcess Complete. 50 adversarial prompts saved to 'crocodile_adversarial_prompts.csv'.")
+    print(f"\nCompleted! Saved {len(adversarial_list)} prompts to 'crocodile_adversarial_prompts.csv'.")
