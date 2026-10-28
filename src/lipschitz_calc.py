@@ -7,6 +7,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 import torchvision.transforms as transforms
 from PIL import Image
 import regex as re
+from tqdm import tqdm
 
 @torch.inference_mode()
 def compute_normalized_embeddings(text_list, tokenizer, text_encoder, device="cuda"):
@@ -64,29 +65,30 @@ for cat in template_dict:
 lipschitz_constants = {}
 
 for cat, embeds in prompt_embeddings.items():
+    print(f"\n--- Processing Category: {cat.upper()} ---")
     embeds = embeds.float()
     cos_sims = (embeds @ embeds.T).squeeze().cpu().numpy()
-    images = torch.stack([load_all_seeds_for_prompt(cat, prompt, 0).to(device) for prompt in template_dict[cat]])
-
+    
+    images_list = []
+    prompts = template_dict[cat]
+    for prompt in tqdm(prompts, desc=f"Loading {cat} images from Drive"):
+        images_list.append(load_all_seeds_for_prompt(cat, prompt, device))
+        
+    images = torch.stack(images_list)
     N = images.shape[0]
     lpip_matrix = np.zeros((N, N))
 
     with torch.no_grad():
-        for i in range(N):
+        for i in tqdm(range(N), desc=f"Computing LPIPS pairs for {cat}"):
             for j in range(i+1, N):
-                img_i = images[i:i+1]
-                img_j = images[j:j+1]
-
                 seed_distances = []
-
+                
                 for seed in range(5):
                     img_i = images[i, seed].unsqueeze(0)
                     img_j = images[j, seed].unsqueeze(0)
-
                     seed_distances.append(loss_fc(img_i, img_j).item())
 
                 med_dist = np.median(seed_distances)
-
                 lpip_matrix[i,j] = med_dist
                 lpip_matrix[j,i] = med_dist
 
@@ -94,6 +96,8 @@ for cat, embeds in prompt_embeddings.items():
     valid_pairs_mask = cos_dists > 1e-6
     ratios = np.zeros_like(lpip_matrix)
     ratios[valid_pairs_mask] = lpip_matrix[valid_pairs_mask] / cos_dists[valid_pairs_mask]
+    
     lipschitz_constants[cat] = np.max(ratios)
+    print(f">> Final {cat.upper()} Lipschitz Constant: {lipschitz_constants[cat]:.4f}\n")
 
 
