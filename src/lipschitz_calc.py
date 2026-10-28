@@ -7,6 +7,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 import torchvision.transforms as transforms
 from PIL import Image
 import regex as re
+import glob
 from tqdm import tqdm
 
 @torch.inference_mode()
@@ -29,18 +30,26 @@ def compute_normalized_embeddings(text_list, tokenizer, text_encoder, device="cu
     return torch.nn.functional.normalize(flat_embeddings, p=2, dim=1)
 
 def load_all_seeds_for_prompt(cat, prompt, device):
-    """Loads all 5 seeds for a given prompt and stacks them."""
+    """Loads all 5 seeds for a given prompt using a wildcard search to avoid file-system mangling."""
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
     ])
-
-    prompt = re.sub(r'[^\w\s]', '', prompt).replace(', ', '_')
+    
+    safe_prefix = re.sub(r'[^a-zA-Z0-9]', '', prompt)[:40]
     
     seed_tensors = []
     for index in range(5):
-        file_path = f"/content/drive/MyDrive/AdaVD Images and Figures/Exp1_sb_0.7/crocodile/{cat}/crocodile/original/{prompt}_{index}.png"
-        img = Image.open(file_path).convert('RGB')
+        search_pattern = f"/content/drive/MyDrive/AdaVD Images and Figures/Exp1_sb_0.7/crocodile/{cat}/crocodile/original/*{safe_prefix}*_{index}.png"
+        
+        matching_files = glob.glob(search_pattern)
+        
+        if not matching_files:
+            raise FileNotFoundError(f"Could not find a file matching prompt: {prompt[:40]}... for seed {index}")
+            
+        actual_file_path = matching_files[0]
+        
+        img = Image.open(actual_file_path).convert('RGB')
         seed_tensors.append(transform(img).unsqueeze(0))
         
     return torch.cat(seed_tensors, dim=0).to(device)
