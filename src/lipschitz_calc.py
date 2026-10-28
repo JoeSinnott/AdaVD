@@ -29,23 +29,27 @@ def compute_normalized_embeddings(text_list, tokenizer, text_encoder, device="cu
     
     return torch.nn.functional.normalize(flat_embeddings, p=2, dim=1)
 
+import glob
+import re
+
 def load_all_seeds_for_prompt(cat, prompt, device):
-    """Loads all 5 seeds for a given prompt using a wildcard search to avoid file-system mangling."""
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
     ])
     
-    safe_prefix = re.sub(r'[^a-zA-Z0-9]', '', prompt)[:40]
+    clean_prompt = re.sub(r'[^\w\s]', '', prompt).replace(', ', '_')
+    
+    safe_prefix = clean_prompt[:30]
     
     seed_tensors = []
     for index in range(5):
-        search_pattern = f"/content/drive/MyDrive/AdaVD Images and Figures/Exp1_sb_0.7/crocodile/{cat}/crocodile/original/*{safe_prefix}*_{index}.png"
+        search_pattern = f"/content/drive/MyDrive/AdaVD Images and Figures/Exp1_sb_0.7/crocodile/{cat}/crocodile/original/{safe_prefix}*_{index}.png"
         
         matching_files = glob.glob(search_pattern)
         
         if not matching_files:
-            raise FileNotFoundError(f"Could not find a file matching prompt: {prompt[:40]}... for seed {index}")
+            raise FileNotFoundError(f"Could not find file using pattern: {search_pattern}")
             
         actual_file_path = matching_files[0]
         
