@@ -32,6 +32,9 @@ def load_all_seeds_for_prompt(cat, prompt, device):
         transforms.ToTensor(),
         transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
     ])
+
+    if cat != 'ring-a-bell-croc':
+        prompt = prompt[:-1]
     
     seed_tensors = []
     for index in range(5):
@@ -75,7 +78,7 @@ for cat, embeds in prompt_embeddings.items():
                 img_j = images[j:j+1]
 
                 seed_distances = []
-                
+
                 for seed in range(5):
                     img_i = images[i, seed].unsqueeze(0)
                     img_j = images[j, seed].unsqueeze(0)
