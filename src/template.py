@@ -410,9 +410,9 @@ ringabellcroc = [
 ]
 
 template_dict = {
-    'instance': imagenet_templates,
-    'style': painting_templates,
-    'celebrity': celebrity_templates,
+    # 'instance': imagenet_templates,
+    # 'style': painting_templates,
+    # 'celebrity': celebrity_templates,
     # Custom attack keys:
     'lexical': lexical_templates,
     'multilingual': multilingual_templates,
