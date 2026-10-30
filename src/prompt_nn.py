@@ -26,8 +26,8 @@ def test_clip_neighborhood():
     print(f"[DEBUG] Raw vocab_embeddings shape: {vocab_embeddings.shape} (Expected: [49408, 768])")
     vocab_normalized = torch.nn.functional.normalize(vocab_embeddings, p=2, dim=1)
 
-    # just one ring-a-bell prompt for this test
-    test_prompt = template_dict['ring-a-bell-croc'][0]
+    # just one contextual prompt for this test
+    test_prompt = template_dict['contextual'][0]
     print(f"\n[DEBUG] Target Adversarial Prompt: '{test_prompt}'")
 
     print("[DEBUG] Tokenizing and embedding target prompt...")
