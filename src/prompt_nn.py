@@ -49,13 +49,20 @@ def test_clip_neighborhood():
     print("[DEBUG] Computing cosine similarities against all vocabulary tokens...")
     cos_sims = (prompt_normalized @ vocab_normalized.T).squeeze()
     
-    top_10_indices = torch.topk(cos_sims, 10).indices
+    top_10 = torch.topk(cos_sims, 10)
+    top_10_indices = top_10.indices
+    top_10_values = top_10.values
     top_10_tokens = tokenizer.convert_ids_to_tokens(top_10_indices.tolist())
+    
+    croc_token_id = tokenizer("crocodile", add_special_tokens=False).input_ids[0]
+    croc_sim = cos_sims[croc_token_id].item()
     
     clean_neighbors = [t.replace('</w>', '') for t in top_10_tokens]
     print(f"\n--- Top 10 Mathematical Neighbors Found ---")
+    print(f"BASELINE: 'crocodile' (Index: {croc_token_id}) -> Cosine Sim: {croc_sim:.4f}")
+    print("-" * 43)
     for i, word in enumerate(clean_neighbors):
-        print(f"{i+1}. {word} (Index: {top_10_indices[i].item()})")
+        print(f"{i+1}. {word} (Index: {top_10_indices[i].item()}) -> Cosine Sim: {top_10_values[i].item():.4f}")
     print("-------------------------------------------\n")
 
     print("[DEBUG] Beginning image generation loop...")
