@@ -21,33 +21,50 @@ def test_clip_neighborhood():
     text_encoder = pipe.text_encoder
     print("[DEBUG] Models loaded successfully to GPU.")
 
-    print("[DEBUG] Extracting CLIP vocabulary weights...")
-    vocab_embeddings = text_encoder.get_input_embeddings().weight.float()
-    print(f"[DEBUG] Raw vocab_embeddings shape: {vocab_embeddings.shape} (Expected: [49408, 768])")
-    vocab_normalized = torch.nn.functional.normalize(vocab_embeddings, p=2, dim=1)
+    print("[DEBUG] Generating true Layer 12 contextualized vocabulary space...")
+    vocab_size = len(tokenizer)
+    start_id = tokenizer.bos_token_id
+    end_id = tokenizer.eos_token_id
+    
+    batch_size = 2048
+    layer12_vocab_list = []
+    
+    # Push the entire dictionary through CLIP to get Layer 12 representations
+    with torch.no_grad():
+        for i in range(0, vocab_size, batch_size):
+            chunk_size = min(batch_size, vocab_size - i)
+            tokens = torch.arange(i, i + chunk_size, device=device).unsqueeze(1)
+            
+            # Format: [BOS, TOKEN, EOS]
+            bos_col = torch.full((chunk_size, 1), start_id, device=device)
+            eos_col = torch.full((chunk_size, 1), end_id, device=device)
+            batch_input_ids = torch.cat([bos_col, tokens, eos_col], dim=1)
+            
+            # Extract Layer 12 hidden states
+            hidden_states = text_encoder(batch_input_ids).last_hidden_state
+            
+            # Grab the contextualized vector of the middle token (index 1)
+            token_embeds = hidden_states[:, 1, :]
+            layer12_vocab_list.append(token_embeds)
+            
+    vocab_layer12 = torch.cat(layer12_vocab_list, dim=0)
+    vocab_normalized = torch.nn.functional.normalize(vocab_layer12, p=2, dim=1)
 
-    # just one synonym prompt for this test
-    test_prompt = template_dict['synonyms'][0]
     print(f"\n[DEBUG] Target Adversarial Prompt: '{test_prompt}'")
-
-    print("[DEBUG] Tokenizing and extracting true EOS pooled vector...")
-    inputs = tokenizer(
-        test_prompt, 
-        padding="max_length", 
-        max_length=tokenizer.model_max_length, 
-        truncation=True, 
-        return_tensors="pt"
-    ).to(device)
+    print("[DEBUG] Processing target prompt at Layer 12...")
     
-    outputs = text_encoder(**inputs)
+    # Tokenize WITHOUT padding to prevent dilution
+    inputs = tokenizer(test_prompt, return_tensors="pt").to(device)
+    prompt_out = text_encoder(**inputs).last_hidden_state
     
-    # outputs.pooler_output extracts the exact End-of-Text embedding (shape: [1, 768])
-    # This avoids the padding mush entirely.
-    prompt_vector = outputs.pooler_output.float()
+    # Slice out BOS (0) and EOS (-1) to isolate the true contextualized words
+    pure_word_embeds = prompt_out[0, 1:-1, :]
+    
+    # Average the contextualized words
+    prompt_vector = pure_word_embeds.mean(dim=0).unsqueeze(0)
     prompt_normalized = torch.nn.functional.normalize(prompt_vector, p=2, dim=1)
-    print(f"[DEBUG] Pooled prompt vector shape: {prompt_normalized.shape} (Expected: [1, 768])")
 
-    print("[DEBUG] Computing cosine similarities against all vocabulary tokens...")
+    print("[DEBUG] Computing cosine similarities in Layer 12 space...")
     cos_sims = (prompt_normalized @ vocab_normalized.T).squeeze()
     
     top_10 = torch.topk(cos_sims, 10)
@@ -55,11 +72,11 @@ def test_clip_neighborhood():
     top_10_values = top_10.values
     top_10_tokens = tokenizer.convert_ids_to_tokens(top_10_indices.tolist())
     
-    croc_token_id = tokenizer("crocodile", add_special_tokens=False).input_ids[0]
+    croc_token_id = tokenizer.encode("crocodile", add_special_tokens=False)[0]
     croc_sim = cos_sims[croc_token_id].item()
     
     clean_neighbors = [t.replace('</w>', '') for t in top_10_tokens]
-    print(f"\n--- Top 10 Mathematical Neighbors Found ---")
+    print(f"\n--- Top 10 Contextualized Neighbors Found ---")
     print(f"BASELINE: 'crocodile' (Index: {croc_token_id}) -> Cosine Sim: {croc_sim:.4f}")
     print("-" * 43)
     for i, word in enumerate(clean_neighbors):
