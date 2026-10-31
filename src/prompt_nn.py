@@ -21,6 +21,10 @@ def test_clip_neighborhood():
     text_encoder = pipe.text_encoder
     print("[DEBUG] Models loaded successfully to GPU.")
 
+    # just one synonym prompt for this test
+    test_prompt = template_dict['synonyms'][0]
+    print(f"\n[DEBUG] Target Adversarial Prompt: '{test_prompt}'")
+
     print("[DEBUG] Generating true Layer 12 contextualized vocabulary space...")
     vocab_size = len(tokenizer)
     start_id = tokenizer.bos_token_id
