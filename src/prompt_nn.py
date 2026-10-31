@@ -30,7 +30,7 @@ def test_clip_neighborhood():
     test_prompt = template_dict['contextual'][0]
     print(f"\n[DEBUG] Target Adversarial Prompt: '{test_prompt}'")
 
-    print("[DEBUG] Tokenizing and embedding target prompt...")
+    print("[DEBUG] Tokenizing and extracting true EOS pooled vector...")
     inputs = tokenizer(
         test_prompt, 
         padding="max_length", 
@@ -39,12 +39,13 @@ def test_clip_neighborhood():
         return_tensors="pt"
     ).to(device)
     
-    prompt_embed = text_encoder(inputs.input_ids)[0]
-    print(f"[DEBUG] Initial prompt embedding shape: {prompt_embed.shape} (Expected: [1, 77, 768])")
+    outputs = text_encoder(**inputs)
     
-    prompt_vector = prompt_embed.float().mean(dim=1) 
+    # outputs.pooler_output extracts the exact End-of-Text embedding (shape: [1, 768])
+    # This avoids the padding mush entirely.
+    prompt_vector = outputs.pooler_output.float()
     prompt_normalized = torch.nn.functional.normalize(prompt_vector, p=2, dim=1)
-    print(f"[DEBUG] Final normalized prompt vector shape: {prompt_normalized.shape} (Expected: [1, 768])")
+    print(f"[DEBUG] Pooled prompt vector shape: {prompt_normalized.shape} (Expected: [1, 768])")
 
     print("[DEBUG] Computing cosine similarities against all vocabulary tokens...")
     cos_sims = (prompt_normalized @ vocab_normalized.T).squeeze()
